@@ -144,7 +144,7 @@ def _is_guess_match(guess: str, name: str) -> bool:
     return guess in name.lower()
 
 
-@app.on_message(filters.text & filters.group & ~filters.via_bot)
+@app.on_message(filters.text & filters.group & ~filters.via_bot & ~filters.regex(r"^/"))
 async def guess_handler(client, message: Message):
     if not message.text or message.text.startswith("/"):
         return
