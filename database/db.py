@@ -1,0 +1,23 @@
+from motor.motor_asyncio import AsyncIOMotorClient
+from config import MONGO_URI, MONGO_DB_NAME
+
+_client = AsyncIOMotorClient(MONGO_URI)
+db = _client[MONGO_DB_NAME]
+
+# Collections
+characters_col = db["characters"]          # character cards
+groups_col = db["groups"]                  # per-group game state/settings
+group_scores_col = db["group_scores"]      # per-group per-user points
+global_scores_col = db["global_scores"]    # global per-user points
+admins_col = db["admins"]                  # bot admins (besides owner)
+settings_col = db["settings"]              # singleton bot-wide settings (log channel, start media, leaderboard image)
+users_col = db["users"]                    # cache of user_id -> name (for leaderboard mentions)
+
+
+async def ensure_indexes():
+    await characters_col.create_index("card_id", unique=True)
+    await group_scores_col.create_index([("chat_id", 1), ("user_id", 1)], unique=True)
+    await global_scores_col.create_index("user_id", unique=True)
+    await admins_col.create_index("user_id", unique=True)
+    await groups_col.create_index("chat_id", unique=True)
+    await users_col.create_index("user_id", unique=True)
