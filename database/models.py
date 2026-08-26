@@ -45,6 +45,19 @@ async def total_characters():
     return await characters_col.count_documents({})
 
 
+async def list_characters_page(page: int, page_size: int = 10):
+    skip = max(page - 1, 0) * page_size
+    cursor = characters_col.find({}).sort("card_id", 1).skip(skip).limit(page_size)
+    items = await cursor.to_list(length=page_size)
+    total = await characters_col.count_documents({})
+    return items, total
+
+
+async def delete_character(card_id: int) -> bool:
+    result = await characters_col.delete_one({"card_id": card_id})
+    return result.deleted_count > 0
+
+
 async def random_character(exclude_ids):
     """Pick a random character not in exclude_ids. Falls back to full pool if everything is excluded."""
     cursor = characters_col.aggregate([
@@ -246,3 +259,25 @@ async def set_leaderboard_image(file_id):
 async def get_leaderboard_image():
     doc = await get_settings()
     return doc.get("leaderboard_image_id")
+
+
+# ---------------- Stats (owner) ----------------
+
+async def count_active_groups():
+    return await groups_col.count_documents({"active": True})
+
+
+async def count_all_groups():
+    return await groups_col.count_documents({})
+
+
+async def count_total_users():
+    return await users_col.count_documents({})
+
+
+async def count_guesses_since(since_epoch):
+    return await score_events_col.count_documents({"timestamp": {"$gte": since_epoch}})
+
+
+async def count_guesses_total():
+    return await score_events_col.count_documents({})
