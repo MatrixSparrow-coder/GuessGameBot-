@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: guessbot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: MONGO_URI
+        sync: false
+      - key: OWNER_ID
+        sync: false
+      - key: SUPPORT_GROUP_LINK
+        value: https://t.me/InfiniteSelller
+      - key: DEVELOPER_USERNAME
+        value: Crew_allied
