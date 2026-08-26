@@ -46,7 +46,8 @@ def drop_caption():
     return (
         f"⛧ ⟢ {heading} ⟣ ⛧\n"
         f"❖ {tag}\n"
-        f"⏱ 20 seconds • 💬 reply with the name"
+        f"⏱ 20 seconds\n"
+        f"💬 reply with the name"
     )
 
 
@@ -55,11 +56,11 @@ def correct_caption(name, anime, rarity, points, winner_mention):
     rarity_e = RARITY_EMOJI.get(rarity, "⚪")
     return (
         f"✦ ⟡ {heading} ⟡ ✦\n\n"
-        f"⌬ {small_caps('name')}: <b>{name}</b>\n"
-        f"❖ {small_caps('anime')}: {anime}\n"
-        f"◆ {small_caps('rarity')}: {rarity_e} {rarity}\n"
-        f"🏅 {small_caps('winner')}: {winner_mention}\n"
-        f"💎 +{points} {small_caps('points')}"
+        f"⌬ Name: <b>{name}</b>\n"
+        f"❖ Anime: {anime}\n"
+        f"◆ Rarity: {rarity_e} {rarity}\n"
+        f"🏅 Winner: {winner_mention}\n"
+        f"💎 +{points} points"
     )
 
 
@@ -68,10 +69,10 @@ def timeout_caption(name, anime, rarity):
     rarity_e = RARITY_EMOJI.get(rarity, "⚪")
     return (
         f"✦ ⟡ {heading} ⟡ ✦\n\n"
-        f"⌬ {small_caps('name')}: <b>{name}</b>\n"
-        f"❖ {small_caps('anime')}: {anime}\n"
-        f"◆ {small_caps('rarity')}: {rarity_e} {rarity}\n"
-        f"⏰ {small_caps('nobody guessed it right')}"
+        f"⌬ Name: <b>{name}</b>\n"
+        f"❖ Anime: {anime}\n"
+        f"◆ Rarity: {rarity_e} {rarity}\n"
+        f"⏰ Nobody guessed it right"
     )
 
 
