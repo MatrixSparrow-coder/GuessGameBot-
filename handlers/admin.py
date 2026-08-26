@@ -1,0 +1,291 @@
+from pyrogram import filters
+from pyrogram.types import Message, InlineKeyboardMarkup, CallbackQuery
+
+from bot_instance import app
+from config import OWNER_ID
+from database.models import (
+    is_admin, is_owner, add_admin, remove_admin, list_admins,
+    set_log_channel, get_log_channel, next_card_id, add_character,
+    set_leaderboard_image,
+)
+from utils.state import (
+    start_card_flow, get_card_flow, update_card_flow, set_card_step,
+    cancel_card_flow, STEP_WAIT_PHOTO, STEP_WAIT_NAME, STEP_WAIT_ANIME,
+    STEP_WAIT_RARITY, STEP_WAIT_POINTS, STEP_CONFIRM,
+)
+from utils.formatting import card_preview_caption, log_channel_caption
+from utils.keyboards import inline_btn
+
+
+# ---------------- Admin management ----------------
+
+@app.on_message(filters.command("addadmin") & filters.private)
+async def addadmin_cmd(client, message: Message):
+    if not await is_owner(message.from_user.id):
+        await message.reply_text("⛔ Only the bot owner can add admins.")
+        return
+
+    target = None
+    if message.reply_to_message:
+        target = message.reply_to_message.from_user
+    elif len(message.command) > 1 and message.command[1].isdigit():
+        target_id = int(message.command[1])
+        target = type("Obj", (), {"id": target_id})()
+
+    if not target:
+        await message.reply_text("↩️ Reply to a user's message with /addadmin, or use /addadmin <user_id>.")
+        return
+
+    await add_admin(target.id, message.from_user.id)
+    await message.reply_text(f"✅ Added <code>{target.id}</code> as bot admin.")
+
+
+@app.on_message(filters.command("removeadmin") & filters.private)
+async def removeadmin_cmd(client, message: Message):
+    if not await is_owner(message.from_user.id):
+        await message.reply_text("⛔ Only the bot owner can remove admins.")
+        return
+    if len(message.command) < 2 or not message.command[1].isdigit():
+        await message.reply_text("Usage: /removeadmin <user_id>")
+        return
+    await remove_admin(int(message.command[1]))
+    await message.reply_text("✅ Removed.")
+
+
+@app.on_message(filters.command("admins") & filters.private)
+async def admins_cmd(client, message: Message):
+    if not await is_admin(message.from_user.id):
+        return
+    admins = await list_admins()
+    if not admins:
+        await message.reply_text(f"Owner: <code>{OWNER_ID}</code>\nNo extra admins added yet.")
+        return
+    lines = [f"Owner: <code>{OWNER_ID}</code>", "Admins:"]
+    lines += [f"• <code>{a['user_id']}</code>" for a in admins]
+    await message.reply_text("\n".join(lines))
+
+
+# ---------------- Log channel setup ----------------
+# Two ways to set the logs channel (bot must already be admin there):
+#   1. Owner posts /addlog directly inside the channel (works if not posting anonymously).
+#   2. Owner DMs the bot: /addlog @channelusername  or  /addlog -100xxxxxxxxxx
+
+@app.on_message(filters.command("addlog") & filters.channel)
+async def addlog_cmd(client, message: Message):
+    if not message.from_user or not await is_owner(message.from_user.id):
+        return
+    await set_log_channel(message.chat.id)
+    await message.reply_text(f"✅ This channel (<code>{message.chat.id}</code>) is now set as the card logs channel.")
+
+
+@app.on_message(filters.command("addlog") & filters.private)
+async def addlog_private_cmd(client, message: Message):
+    if not await is_owner(message.from_user.id):
+        await message.reply_text("⛔ Only the bot owner can set the logs channel.")
+        return
+    if len(message.command) < 2:
+        await message.reply_text(
+            "Usage: /addlog @channelusername  or  /addlog -100xxxxxxxxxx\n\n"
+            "(Make sure the bot is already an admin in that channel.)"
+        )
+        return
+    target = message.command[1]
+    try:
+        chat = await client.get_chat(target if target.startswith("@") else int(target))
+    except Exception as e:
+        await message.reply_text(f"⛔ Couldn't find that channel: {e}")
+        return
+    try:
+        member = await client.get_chat_member(chat.id, "me")
+        if member.status.value not in ("administrator", "creator"):
+            await message.reply_text("⛔ I need to be an admin in that channel first.")
+            return
+    except Exception:
+        await message.reply_text("⛔ I need to be an admin in that channel first.")
+        return
+
+    await set_log_channel(chat.id)
+    await message.reply_text(f"✅ <b>{chat.title}</b> is now set as the card logs channel.")
+
+
+# ---------------- Guided card creation ----------------
+
+@app.on_message(filters.command("addcard") & filters.private)
+async def addcard_cmd(client, message: Message):
+    if not await is_admin(message.from_user.id):
+        await message.reply_text("⛔ This command is for bot admins/owner only.")
+        return
+
+    log_channel = await get_log_channel()
+    if not log_channel:
+        await message.reply_text(
+            "⛔ No logs channel is set yet. Post /addlog inside your logs channel first "
+            "(the bot must already be admin there)."
+        )
+        return
+
+    start_card_flow(message.from_user.id)
+    await message.reply_text(
+        "🎴 <b>New Card — Step 1/5</b>\n\n📸 Send the character image now."
+    )
+
+
+@app.on_message(filters.command("cancel") & filters.private)
+async def cancel_cmd(client, message: Message):
+    if get_card_flow(message.from_user.id):
+        cancel_card_flow(message.from_user.id)
+        await message.reply_text("❌ Card creation cancelled.")
+
+
+@app.on_message(filters.private & (filters.photo | filters.text) & ~filters.command([
+    "start", "help", "addcard", "addadmin", "removeadmin", "admins", "cancel",
+    "startmedia", "imageleb", "top", "gtop", "startgame", "stopgame",
+]))
+async def card_flow_router(client, message: Message):
+    state = get_card_flow(message.from_user.id)
+    if not state:
+        return  # not in a card creation flow, ignore
+
+    step = state["step"]
+
+    if step == STEP_WAIT_PHOTO:
+        if not message.photo:
+            await message.reply_text("📸 Please send a photo of the character.")
+            return
+        update_card_flow(message.from_user.id, file_id=message.photo.file_id)
+        set_card_step(message.from_user.id, STEP_WAIT_NAME)
+        await message.reply_text("🎴 <b>Step 2/5</b>\n\n✏️ What is the character's name?")
+        return
+
+    if step == STEP_WAIT_NAME:
+        if not message.text:
+            await message.reply_text("✏️ Please send the character's name as text.")
+            return
+        update_card_flow(message.from_user.id, name=message.text.strip())
+        set_card_step(message.from_user.id, STEP_WAIT_ANIME)
+        await message.reply_text("🎴 <b>Step 3/5</b>\n\n🎭 Which anime/series is this character from?")
+        return
+
+    if step == STEP_WAIT_ANIME:
+        if not message.text:
+            await message.reply_text("🎭 Please send the anime/series name as text.")
+            return
+        update_card_flow(message.from_user.id, anime=message.text.strip())
+        set_card_step(message.from_user.id, STEP_WAIT_RARITY)
+        kb = InlineKeyboardMarkup([[
+            inline_btn("🟤 Common", callback_data="rarity_Common"),
+            inline_btn("🟢 Rare", callback_data="rarity_Rare"),
+        ], [
+            inline_btn("🔵 Epic", callback_data="rarity_Epic"),
+            inline_btn("🟣 Legendary", callback_data="rarity_Legendary"),
+        ]])
+        await message.reply_text("🎴 <b>Step 4/5</b>\n\n💎 Choose a rarity:", reply_markup=kb)
+        return
+
+    if step == STEP_WAIT_POINTS:
+        if not message.text or not message.text.strip().isdigit():
+            await message.reply_text("⭐ Please send a whole number for points (e.g. 10).")
+            return
+        points = int(message.text.strip())
+        update_card_flow(message.from_user.id, points=points)
+        set_card_step(message.from_user.id, STEP_CONFIRM)
+        await _show_preview(message.from_user.id, message)
+        return
+
+
+@app.on_callback_query(filters.regex("^rarity_"))
+async def rarity_cb(client, callback_query: CallbackQuery):
+    state = get_card_flow(callback_query.from_user.id)
+    if not state or state["step"] != STEP_WAIT_RARITY:
+        await callback_query.answer("This card session expired.", show_alert=True)
+        return
+    rarity = callback_query.data.split("_", 1)[1]
+    update_card_flow(callback_query.from_user.id, rarity=rarity)
+    set_card_step(callback_query.from_user.id, STEP_WAIT_POINTS)
+    await callback_query.answer()
+    await callback_query.message.edit_text(f"💎 Rarity set: <b>{rarity}</b>")
+    await callback_query.message.reply_text("🎴 <b>Step 5/5</b>\n\n⭐ How many points for a correct guess on this card?")
+
+
+async def _show_preview(user_id, message: Message):
+    state = get_card_flow(user_id)
+    data = state["data"]
+    caption = card_preview_caption(data["name"], data["anime"], data["rarity"], data["points"])
+    kb = InlineKeyboardMarkup([[
+        inline_btn("✅ Confirm", callback_data="card_confirm", style="success"),
+        inline_btn("🔙 Back", callback_data="card_back"),
+    ], [
+        inline_btn("❌ Cancel", callback_data="card_cancel", style="danger"),
+    ]])
+    await message.reply_photo(data["file_id"], caption=caption, reply_markup=kb)
+
+
+@app.on_callback_query(filters.regex("^card_confirm$"))
+async def card_confirm_cb(client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    state = get_card_flow(user_id)
+    if not state or state["step"] != STEP_CONFIRM:
+        await callback_query.answer("This card session expired.", show_alert=True)
+        return
+
+    await callback_query.answer("Saving...")
+    data = state["data"]
+    log_channel = await get_log_channel()
+
+    card_id = await next_card_id()
+    added_by_mention = f'<a href="tg://user?id={user_id}">{callback_query.from_user.first_name}</a>'
+    log_caption = log_channel_caption(card_id, data["name"], data["anime"], data["rarity"], data["points"], added_by_mention)
+
+    log_msg = await client.send_photo(log_channel, data["file_id"], caption=log_caption)
+
+    await add_character(
+        card_id=card_id,
+        file_id=data["file_id"],
+        name=data["name"],
+        anime=data["anime"],
+        rarity=data["rarity"],
+        points=data["points"],
+        added_by=user_id,
+        log_message_id=log_msg.id,
+    )
+    cancel_card_flow(user_id)
+    await callback_query.message.edit_caption(
+        callback_query.message.caption + f"\n\n✅ Saved to logs channel — Card ID #{card_id}"
+    )
+
+
+@app.on_callback_query(filters.regex("^card_back$"))
+async def card_back_cb(client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    set_card_step(user_id, STEP_WAIT_RARITY)
+    await callback_query.answer()
+    kb = InlineKeyboardMarkup([[
+        inline_btn("🟤 Common", callback_data="rarity_Common"),
+        inline_btn("🟢 Rare", callback_data="rarity_Rare"),
+    ], [
+        inline_btn("🔵 Epic", callback_data="rarity_Epic"),
+        inline_btn("🟣 Legendary", callback_data="rarity_Legendary"),
+    ]])
+    await callback_query.message.reply_text("💎 Choose a rarity again:", reply_markup=kb)
+
+
+@app.on_callback_query(filters.regex("^card_cancel$"))
+async def card_cancel_cb(client, callback_query: CallbackQuery):
+    cancel_card_flow(callback_query.from_user.id)
+    await callback_query.answer("Cancelled")
+    await callback_query.message.edit_caption(callback_query.message.caption + "\n\n❌ Cancelled.")
+
+
+# ---------------- Leaderboard image ----------------
+
+@app.on_message(filters.command("imageleb") & filters.private)
+async def imageleb_cmd(client, message: Message):
+    if not await is_admin(message.from_user.id):
+        await message.reply_text("⛔ This command is for bot admins/owner only.")
+        return
+    replied = message.reply_to_message
+    if not replied or not replied.photo:
+        await message.reply_text("↩️ Reply to a photo with /imageleb to set it as the leaderboard banner.")
+        return
+    await set_leaderboard_image(replied.photo.file_id)
+    await message.reply_text("✅ Leaderboard banner image updated.")
