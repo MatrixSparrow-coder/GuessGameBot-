@@ -2,7 +2,7 @@ import random
 import time
 from database.db import (
     characters_col, groups_col, group_scores_col,
-    global_scores_col, admins_col, settings_col, users_col,
+    global_scores_col, score_events_col, admins_col, settings_col, users_col,
 )
 from config import OWNER_ID, NO_REPEAT_HISTORY
 
@@ -125,6 +125,34 @@ async def add_points(chat_id, user_id, points):
         {"$inc": {"points": points}},
         upsert=True,
     )
+    # Timestamped event, used to compute daily/weekly leaderboards.
+    await score_events_col.insert_one({
+        "chat_id": chat_id,
+        "user_id": user_id,
+        "points": points,
+        "timestamp": time.time(),
+    })
+
+
+async def aggregate_scores(chat_id, since_epoch, limit=10):
+    """chat_id=None means global (all groups combined). since_epoch=None means all-time."""
+    match = {}
+    if chat_id is not None:
+        match["chat_id"] = chat_id
+    if since_epoch is not None:
+        match["timestamp"] = {"$gte": since_epoch}
+
+    pipeline = []
+    if match:
+        pipeline.append({"$match": match})
+    pipeline += [
+        {"$group": {"_id": "$user_id", "points": {"$sum": "$points"}}},
+        {"$sort": {"points": -1}},
+        {"$limit": limit},
+    ]
+    cursor = score_events_col.aggregate(pipeline)
+    results = await cursor.to_list(length=limit)
+    return [{"user_id": r["_id"], "points": r["points"]} for r in results]
 
 
 async def top_group_scores(chat_id, limit=10):
