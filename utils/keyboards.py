@@ -46,3 +46,23 @@ def keyboard_btn(text, style=None, web_app_url=None):
     if style and style in _STYLE_EMOJI and not text.startswith(_STYLE_EMOJI[style]):
         kwargs["text"] = f"{_STYLE_EMOJI[style]} {text}"
     return KeyboardButton(**kwargs)
+
+
+_PERIOD_META = {
+    "daily": ("📅", "Daily"),
+    "weekly": ("🗓", "Weekly"),
+    "overall": ("♾", "Overall"),
+}
+
+
+def leaderboard_keyboard(scope: str, active_period: str):
+    """scope: 'group' or 'global'. active_period: 'daily' | 'weekly' | 'overall'."""
+    from pyrogram.types import InlineKeyboardMarkup
+
+    buttons = []
+    for period, (emoji, label) in _PERIOD_META.items():
+        prefix = "✅ " if period == active_period else ""
+        buttons.append(
+            inline_btn(f"{prefix}{emoji} {label}", callback_data=f"lb_{scope}_{period}")
+        )
+    return InlineKeyboardMarkup([buttons])
