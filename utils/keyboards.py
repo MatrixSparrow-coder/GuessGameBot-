@@ -59,10 +59,11 @@ def leaderboard_keyboard(scope: str, active_period: str):
     """scope: 'group' or 'global'. active_period: 'daily' | 'weekly' | 'overall'."""
     from pyrogram.types import InlineKeyboardMarkup
 
-    buttons = []
-    for period, (emoji, label) in _PERIOD_META.items():
+    def make(period):
+        emoji, label = _PERIOD_META[period]
         prefix = "✅ " if period == active_period else ""
-        buttons.append(
-            inline_btn(f"{prefix}{emoji} {label}", callback_data=f"lb_{scope}_{period}")
-        )
-    return InlineKeyboardMarkup([buttons])
+        return inline_btn(f"{prefix}{emoji} {label}", callback_data=f"lb_{scope}_{period}")
+
+    row1 = [make("daily"), make("weekly")]
+    row2 = [make("overall")]
+    return InlineKeyboardMarkup([row1, row2])
