@@ -3,7 +3,7 @@ import logging
 
 from pyrogram import filters
 from pyrogram.types import Message, ChatMemberUpdated
-from pyrogram.enums import ChatMemberStatus
+from pyrogram.enums import ChatMemberStatus, ChatType
 
 from bot_instance import app
 from config import GUESS_WINDOW_SECONDS, GAP_BETWEEN_DROPS_SECONDS
@@ -102,6 +102,12 @@ async def start_game_for_group(client, chat_id, title=None):
 
 @app.on_chat_member_updated()
 async def on_bot_added(client, update: ChatMemberUpdated):
+    # Only the game loop should run in actual groups/supergroups.
+    # Channels (like the logs channel) must NEVER get the auto-drop game,
+    # even though the bot becomes admin there too.
+    if update.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        return
+
     me_id = client.me.id if client.me else (await client.get_me()).id
     if update.new_chat_member and update.new_chat_member.user.id == me_id:
         status = update.new_chat_member.status
