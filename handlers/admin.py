@@ -6,8 +6,11 @@ from config import OWNER_ID
 from database.models import (
     is_admin, is_owner, add_admin, remove_admin, list_admins,
     set_log_channel, get_log_channel, next_card_id, add_character,
-    set_leaderboard_image,
+    set_leaderboard_image, list_characters_page, delete_character,
+    count_active_groups, count_all_groups, count_total_users,
+    count_guesses_since, count_guesses_total, total_characters,
 )
+from utils.timeutils import ist_today_start_epoch
 from utils.state import (
     start_card_flow, get_card_flow, update_card_flow, set_card_step,
     cancel_card_flow, STEP_WAIT_PHOTO, STEP_WAIT_NAME, STEP_WAIT_ANIME,
@@ -140,6 +143,7 @@ async def cancel_cmd(client, message: Message):
 @app.on_message(filters.private & (filters.photo | filters.text) & ~filters.command([
     "start", "help", "addcard", "addadmin", "removeadmin", "admins", "cancel",
     "startmedia", "imageleb", "top", "gtop", "startgame", "stopgame",
+    "listcards", "removecard", "stats",
 ]))
 async def card_flow_router(client, message: Message):
     state = get_card_flow(message.from_user.id)
@@ -289,3 +293,99 @@ async def imageleb_cmd(client, message: Message):
         return
     await set_leaderboard_image(replied.photo.file_id)
     await message.reply_text("✅ Leaderboard banner image updated.")
+
+
+# ---------------- Card management: list & remove ----------------
+
+RARITY_EMOJI = {"Common": "🟤", "Rare": "🟢", "Epic": "🔵", "Legendary": "🟣"}
+CARDS_PAGE_SIZE = 10
+
+
+def _format_cards_page(items, page, total):
+    total_pages = max((total + CARDS_PAGE_SIZE - 1) // CARDS_PAGE_SIZE, 1)
+    lines = [f"🎴 <b>All Cards</b> ({total} total) — page {page}/{total_pages}", ""]
+    if not items:
+        lines.append("No cards found.")
+    for c in items:
+        emoji = RARITY_EMOJI.get(c["rarity"], "⚪")
+        lines.append(f"#{c['card_id']} — <b>{c['name']}</b> ({c['anime']}) {emoji} {c['rarity']} • {c['points']} pts")
+    return "\n".join(lines), total_pages
+
+
+def _cards_page_keyboard(page, total_pages):
+    buttons = []
+    if page > 1:
+        buttons.append(inline_btn("⬅️ Prev", callback_data=f"cards_page_{page - 1}"))
+    if page < total_pages:
+        buttons.append(inline_btn("Next ➡️", callback_data=f"cards_page_{page + 1}"))
+    return InlineKeyboardMarkup([buttons]) if buttons else None
+
+
+@app.on_message(filters.command("listcards") & filters.private)
+async def listcards_cmd(client, message: Message):
+    if not await is_admin(message.from_user.id):
+        await message.reply_text("⛔ This command is for bot admins/owner only.")
+        return
+    items, total = await list_characters_page(1, CARDS_PAGE_SIZE)
+    text, total_pages = _format_cards_page(items, 1, total)
+    kb = _cards_page_keyboard(1, total_pages)
+    await message.reply_text(text, reply_markup=kb)
+
+
+@app.on_callback_query(filters.regex(r"^cards_page_(\d+)$"))
+async def cards_page_cb(client, callback_query: CallbackQuery):
+    if not await is_admin(callback_query.from_user.id):
+        await callback_query.answer("⛔ Admins only.", show_alert=True)
+        return
+    page = int(callback_query.data.split("_")[-1])
+    items, total = await list_characters_page(page, CARDS_PAGE_SIZE)
+    text, total_pages = _format_cards_page(items, page, total)
+    kb = _cards_page_keyboard(page, total_pages)
+    await callback_query.answer()
+    try:
+        await callback_query.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass
+
+
+@app.on_message(filters.command("removecard") & filters.private)
+async def removecard_cmd(client, message: Message):
+    if not await is_admin(message.from_user.id):
+        await message.reply_text("⛔ This command is for bot admins/owner only.")
+        return
+    if len(message.command) < 2 or not message.command[1].lstrip("#").isdigit():
+        await message.reply_text("Usage: /removecard <card_id>\nExample: /removecard 12")
+        return
+    card_id = int(message.command[1].lstrip("#"))
+    deleted = await delete_character(card_id)
+    if deleted:
+        await message.reply_text(f"✅ Card #{card_id} removed. It won't drop again.")
+    else:
+        await message.reply_text(f"⛔ No card found with ID #{card_id}.")
+
+
+# ---------------- Owner stats ----------------
+
+@app.on_message(filters.command("stats") & filters.private)
+async def stats_cmd(client, message: Message):
+    if not await is_owner(message.from_user.id):
+        await message.reply_text("⛔ Owner only command.")
+        return
+
+    active_groups = await count_active_groups()
+    all_groups = await count_all_groups()
+    total_cards = await total_characters()
+    total_users = await count_total_users()
+    guesses_today = await count_guesses_since(ist_today_start_epoch())
+    guesses_all_time = await count_guesses_total()
+
+    text = (
+        "📊 <b>Bot Stats</b>\n"
+        "⊹═══════════════⊹\n\n"
+        f"👥 Total Users: {total_users}\n"
+        f"💬 Active Groups: {active_groups} (of {all_groups} ever added)\n"
+        f"🎴 Total Cards: {total_cards}\n"
+        f"🎯 Guesses Today: {guesses_today}\n"
+        f"🏆 Guesses All-Time: {guesses_all_time}"
+    )
+    await message.reply_text(text)
