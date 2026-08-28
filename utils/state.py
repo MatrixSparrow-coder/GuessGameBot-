@@ -69,3 +69,23 @@ def get_pending_drop(chat_id):
 
 def clear_pending_drop(chat_id):
     pending_drops.pop(chat_id, None)
+
+
+# ---- /startweb auto-card fetch task (bot-wide, not per-group) ----
+_web_fetch_task = {"task": None}
+
+
+def is_web_fetch_running():
+    task = _web_fetch_task["task"]
+    return task is not None and not task.done()
+
+
+def start_web_fetch_task(task):
+    _web_fetch_task["task"] = task
+
+
+def stop_web_fetch_task():
+    task = _web_fetch_task["task"]
+    if task and not task.done():
+        task.cancel()
+    _web_fetch_task["task"] = None
