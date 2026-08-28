@@ -2,7 +2,11 @@ from pyrogram import filters
 from pyrogram.types import Message, CallbackQuery
 
 from bot_instance import app
-from database.models import aggregate_scores, get_user_name, get_leaderboard_image
+from database.models import (
+    aggregate_scores, get_user_name, get_leaderboard_image,
+    set_group_leaderboard_reset, get_group_leaderboard_reset,
+)
+from handlers.game import _is_group_admin_or_bot_admin
 from utils.formatting import leaderboard_text
 from utils.keyboards import leaderboard_keyboard
 from utils.timeutils import since_epoch_for_period
@@ -16,7 +20,14 @@ def _mention(user_id, name):
 
 async def _build_leaderboard(scope: str, period: str, chat_id: int):
     since_epoch = since_epoch_for_period(period)
-    target_chat = chat_id if scope == "group" else None
+
+    if scope == "group":
+        reset_at = await get_group_leaderboard_reset(chat_id)
+        if reset_at:
+            since_epoch = max(since_epoch or 0, reset_at)
+        target_chat = chat_id
+    else:
+        target_chat = None  # global is never affected by a group's /reset
 
     scores = await aggregate_scores(target_chat, since_epoch, limit=10)
     rows = []
@@ -48,6 +59,18 @@ async def top_cmd(client, message: Message):
 @app.on_message(filters.command("gtop"))
 async def gtop_cmd(client, message: Message):
     await _send_leaderboard(message, "global", message.chat.id)
+
+
+@app.on_message(filters.command("reset") & filters.group)
+async def reset_leaderboard_cmd(client, message: Message):
+    if not await _is_group_admin_or_bot_admin(client, message.chat.id, message.from_user.id):
+        await message.reply_text("⛔ Only group admins can reset the leaderboard.")
+        return
+    await set_group_leaderboard_reset(message.chat.id)
+    await message.reply_text(
+        "🔄 This group's leaderboard has been reset!\n"
+        "Scores start counting fresh from now — the global leaderboard is unaffected."
+    )
 
 
 @app.on_callback_query(filters.regex(r"^lb_(group|global)_(daily|weekly|overall)$"))
