@@ -3,6 +3,7 @@ import time
 from database.db import (
     characters_col, groups_col, group_scores_col,
     global_scores_col, score_events_col, admins_col, settings_col, users_col,
+    banned_users_col,
 )
 from config import OWNER_ID, NO_REPEAT_HISTORY
 
@@ -160,13 +161,15 @@ async def add_points(chat_id, user_id, points):
     })
 
 
-async def aggregate_scores(chat_id, since_epoch, limit=10):
+async def aggregate_scores(chat_id, since_epoch, limit=10, exclude_user_ids=None):
     """chat_id=None means global (all groups combined). since_epoch=None means all-time."""
     match = {}
     if chat_id is not None:
         match["chat_id"] = chat_id
     if since_epoch is not None:
         match["timestamp"] = {"$gte": since_epoch}
+    if exclude_user_ids:
+        match["user_id"] = {"$nin": list(exclude_user_ids)}
 
     pipeline = []
     if match:
@@ -294,3 +297,29 @@ async def count_guesses_since(since_epoch):
 
 async def count_guesses_total():
     return await score_events_col.count_documents({})
+
+
+# ---------------- Bans (bot admin/owner only — blocks playing + hides from leaderboard) ----------------
+
+async def ban_user(user_id, banned_by):
+    await banned_users_col.update_one(
+        {"user_id": user_id},
+        {"$set": {"user_id": user_id, "banned_by": banned_by, "banned_at": time.time()}},
+        upsert=True,
+    )
+
+
+async def unban_user(user_id):
+    result = await banned_users_col.delete_one({"user_id": user_id})
+    return result.deleted_count > 0
+
+
+async def is_banned(user_id) -> bool:
+    doc = await banned_users_col.find_one({"user_id": user_id})
+    return doc is not None
+
+
+async def get_banned_user_ids():
+    cursor = banned_users_col.find({}, {"user_id": 1})
+    docs = await cursor.to_list(length=None)
+    return [d["user_id"] for d in docs]
