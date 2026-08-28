@@ -13,6 +13,7 @@ score_events_col = db["score_events"]      # every correct-guess event, timestam
 admins_col = db["admins"]                  # bot admins (besides owner)
 settings_col = db["settings"]              # singleton bot-wide settings (log channel, start media, leaderboard image)
 users_col = db["users"]                    # cache of user_id -> name (for leaderboard mentions)
+banned_users_col = db["banned_users"]      # users banned from playing (by bot admin/owner)
 
 
 async def ensure_indexes():
@@ -24,3 +25,4 @@ async def ensure_indexes():
     await admins_col.create_index("user_id", unique=True)
     await groups_col.create_index("chat_id", unique=True)
     await users_col.create_index("user_id", unique=True)
+    await banned_users_col.create_index("user_id", unique=True)
