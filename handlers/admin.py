@@ -1,23 +1,31 @@
 from pyrogram import filters
 from pyrogram.types import Message, InlineKeyboardMarkup, CallbackQuery
 
+import asyncio
+import logging
+
 from bot_instance import app
-from config import OWNER_ID
+from config import OWNER_ID, AUTO_CARD_POINTS, AUTO_CARD_INTERVAL_SECONDS
 from database.models import (
     is_admin, is_owner, add_admin, remove_admin, list_admins,
     set_log_channel, get_log_channel, next_card_id, add_character,
     set_leaderboard_image, list_characters_page, delete_character,
     count_active_groups, count_all_groups, count_total_users,
     count_guesses_since, count_guesses_total, total_characters,
+    ban_user, unban_user,
 )
 from utils.timeutils import ist_today_start_epoch
+from utils.character_api import fetch_random_character
 from utils.state import (
     start_card_flow, get_card_flow, update_card_flow, set_card_step,
     cancel_card_flow, STEP_WAIT_PHOTO, STEP_WAIT_NAME, STEP_WAIT_ANIME,
     STEP_WAIT_RARITY, STEP_WAIT_POINTS, STEP_CONFIRM,
+    is_web_fetch_running, start_web_fetch_task, stop_web_fetch_task,
 )
 from utils.formatting import card_preview_caption, log_channel_caption
 from utils.keyboards import inline_btn
+
+log = logging.getLogger("guessbot.admin")
 
 
 # ---------------- Admin management ----------------
@@ -143,7 +151,8 @@ async def cancel_cmd(client, message: Message):
 @app.on_message(filters.private & (filters.photo | filters.text) & ~filters.command([
     "start", "help", "addcard", "addadmin", "removeadmin", "admins", "cancel",
     "startmedia", "imageleb", "top", "gtop", "startgame", "stopgame",
-    "listcards", "removecard", "stats",
+    "listcards", "removecard", "stats", "ban", "unban", "reset",
+    "startweb", "stopweb",
 ]))
 async def card_flow_router(client, message: Message):
     state = get_card_flow(message.from_user.id)
@@ -389,3 +398,126 @@ async def stats_cmd(client, message: Message):
         f"🏆 Guesses All-Time: {guesses_all_time}"
     )
     await message.reply_text(text)
+
+
+# ---------------- Ban / Unban (bot admin/owner only, works in groups or DM) ----------------
+
+async def _resolve_target(client, message: Message):
+    if message.reply_to_message and message.reply_to_message.from_user:
+        return message.reply_to_message.from_user
+    if len(message.command) > 1:
+        arg = message.command[1].lstrip("@")
+        if arg.isdigit():
+            uid = int(arg)
+            try:
+                return await client.get_users(uid)
+            except Exception:
+                return type("Obj", (), {"id": uid, "first_name": str(uid)})()
+        try:
+            return await client.get_users(message.command[1])
+        except Exception:
+            return None
+    return None
+
+
+@app.on_message(filters.command("ban"))
+async def ban_cmd(client, message: Message):
+    if not await is_admin(message.from_user.id):
+        await message.reply_text("⛔ This command is for bot admins/owner only.")
+        return
+    target = await _resolve_target(client, message)
+    if not target:
+        await message.reply_text(
+            "Usage: reply to a user's message with /ban, or /ban <user_id / @username>"
+        )
+        return
+    await ban_user(target.id, message.from_user.id)
+    name = getattr(target, "first_name", None) or str(target.id)
+    await message.reply_text(f"🚫 <b>{name}</b> has been banned from playing. They won't appear on any leaderboard.")
+
+
+@app.on_message(filters.command("unban"))
+async def unban_cmd(client, message: Message):
+    if not await is_admin(message.from_user.id):
+        await message.reply_text("⛔ This command is for bot admins/owner only.")
+        return
+    target = await _resolve_target(client, message)
+    if not target:
+        await message.reply_text(
+            "Usage: reply to a user's message with /unban, or /unban <user_id / @username>"
+        )
+        return
+    removed = await unban_user(target.id)
+    name = getattr(target, "first_name", None) or str(target.id)
+    if removed:
+        await message.reply_text(f"✅ <b>{name}</b> has been unbanned and can play again.")
+    else:
+        await message.reply_text(f"{name} wasn't banned.")
+
+
+# ---------------- Auto card fetching from the web (/startweb, /stopweb) ----------------
+
+async def web_fetch_loop(client, log_channel):
+    while True:
+        try:
+            char = await fetch_random_character()
+            if char:
+                card_id = await next_card_id()
+                added_by_mention = f'<a href="{char["source_url"]}">{char["source_name"]}</a>'
+                caption = log_channel_caption(
+                    card_id, char["name"], char["anime"], "Rare", AUTO_CARD_POINTS, added_by_mention
+                )
+                msg = await client.send_photo(log_channel, char["image_url"], caption=caption)
+                await add_character(
+                    card_id=card_id,
+                    file_id=msg.photo.file_id,
+                    name=char["name"],
+                    anime=char["anime"],
+                    rarity="Rare",
+                    points=AUTO_CARD_POINTS,
+                    added_by=f'web:{char["source_name"]}',
+                    log_message_id=msg.id,
+                )
+            else:
+                log.warning("web_fetch_loop: all sources failed this cycle, skipping.")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.exception(f"web_fetch_loop error: {e}")
+
+        await asyncio.sleep(AUTO_CARD_INTERVAL_SECONDS)
+
+
+@app.on_message(filters.command("startweb") 
+@app.on_message(filters.command("startweb") & filters.private)
+async def startweb_cmd(client, message: Message):
+    if not await is_admin(message.from_user.id):
+        await message.reply_text("⛔ This command is for bot admins/owner only.")
+        return
+
+    log_channel = await get_log_channel()
+    if not log_channel:
+        await message.reply_text("⛔ No logs channel set yet. Set one with /addlog first.")
+        return
+
+    if is_web_fetch_running():
+        await message.reply_text("🌐 Auto card fetching is already running.")
+        return
+
+    task = asyncio.create_task(web_fetch_loop(client, log_channel))
+    start_web_fetch_task(task)
+    await message.reply_text(
+        f"🌐 Auto card fetching started!\n"
+        f"A new <b>Rare</b> card ({AUTO_CARD_POINTS} pts) will drop into the logs channel every "
+        f"{AUTO_CARD_INTERVAL_SECONDS} seconds, pulled from AniList/MyAnimeList.\n\n"
+        f"Use /stopweb to stop."
+    )
+
+
+@app.on_message(filters.command("stopweb") & filters.private)
+async def stopweb_cmd(client, message: Message):
+    if not await is_admin(message.from_user.id):
+        await message.reply_text("⛔ This command is for bot admins/owner only.")
+        return
+    stop_web_fetch_task()
+    await message.reply_text("🛑 Auto card fetching stopped.")
