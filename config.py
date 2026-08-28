@@ -19,5 +19,9 @@ GAP_BETWEEN_DROPS_SECONDS = int(os.environ.get("GAP_BETWEEN_DROPS_SECONDS", "2")
 # How many recent drops to remember per group to avoid quick repeats
 NO_REPEAT_HISTORY = int(os.environ.get("NO_REPEAT_HISTORY", "50"))
 
+# Auto web-fetched cards (/startweb) — always Rare, fixed points
+AUTO_CARD_POINTS = int(os.environ.get("AUTO_CARD_POINTS", "5"))
+AUTO_CARD_INTERVAL_SECONDS = int(os.environ.get("AUTO_CARD_INTERVAL_SECONDS", "10"))
+
 # Health check server port (for Render web service / uptime pings)
 PORT = int(os.environ.get("PORT", "8080"))
