@@ -98,6 +98,19 @@ async def set_group_active(chat_id, active: bool):
     await groups_col.update_one({"chat_id": chat_id}, {"$set": {"active": active}}, upsert=True)
 
 
+async def set_group_leaderboard_reset(chat_id):
+    await groups_col.update_one(
+        {"chat_id": chat_id},
+        {"$set": {"score_reset_at": time.time()}},
+        upsert=True,
+    )
+
+
+async def get_group_leaderboard_reset(chat_id):
+    doc = await get_group(chat_id)
+    return doc.get("score_reset_at") if doc else None
+
+
 async def push_recent_card(chat_id, card_id):
     await groups_col.update_one(
         {"chat_id": chat_id},
