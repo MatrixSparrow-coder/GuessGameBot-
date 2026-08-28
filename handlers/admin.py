@@ -448,7 +448,7 @@ async def unban_cmd(client, message: Message):
         )
         return
     removed = await unban_user(target.id)
-    name = getattr(target, "first_name", None) or str(target.id)
+name = getattr(target, "first_name", None) or str(target.id)
     if removed:
         await message.reply_text(f"✅ <b>{name}</b> has been unbanned and can play again.")
     else:
@@ -488,7 +488,6 @@ async def web_fetch_loop(client, log_channel):
         await asyncio.sleep(AUTO_CARD_INTERVAL_SECONDS)
 
 
-@app.on_message(filters.command("startweb") 
 @app.on_message(filters.command("startweb") & filters.private)
 async def startweb_cmd(client, message: Message):
     if not await is_admin(message.from_user.id):
